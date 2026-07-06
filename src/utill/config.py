@@ -5,7 +5,7 @@ import os
 @dataclass(frozen=True)
 class ModelConfig:
     base_url: str = "http://localhost:11434/v1"
-    api_key: str = "qwen-local"
+    api_key: str = "qwen3.6-local"
     model: str = "qwen3.6"
 
 

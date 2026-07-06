@@ -400,7 +400,7 @@ wheels = [
 ]
 
 [[package]]
-name = "qwen-test"
+name = "learn_claude_code"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
