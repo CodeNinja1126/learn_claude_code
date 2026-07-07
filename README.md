@@ -6,7 +6,7 @@ with an OpenAI-compatible Qwen endpoint.
 ## Layout
 
 ```text
-src/qwen_test/        reusable client, loop, message, and tool modules
+src/utill/            reusable client, loop, message, and tool modules
 chapters/            s01-s20 learning track adapted for Qwen
 examples/            small runnable experiments
 prompts/             reusable system/tool prompt text
