@@ -1,4 +1,4 @@
-# qwen-test
+# learn_claude_code
 
 Local learning workspace for rebuilding the `learn-claude-code` harness pattern
 with an OpenAI-compatible Qwen endpoint.

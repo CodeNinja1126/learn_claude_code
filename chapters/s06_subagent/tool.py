@@ -80,8 +80,12 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "todo_write", 
-            "description": "Create and manage a task list ...",
+            "name": "todo_write",
+            "description": (
+                "Plan and track multi-step coding work. Use this before starting any task "
+                "that requires multiple steps, file changes, investigation, or a subtask; "
+                "keep exactly one item in_progress and update statuses as work progresses."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -14,6 +14,7 @@ from hook import (
     summary_hook,
 )
 from tool import TOOLS, TOOL_HANDLERS
+import subagent  # Registers the parent-only task tool.
 
 
 SYSTEM = f"너는 디렉토리 {WORKDIR}의 코딩 에이전트야. 도구를 활용해 문제를 해결해, 문제를 해결할 때까지 작업을 멈추지 말고 계속해."
@@ -47,6 +48,10 @@ def _append_tool_result(messages: list[dict[str, Any]], tool_call_id: str, conte
     )
 
 
+def _tool_result_failed(result: Any) -> bool:
+    return str(result).startswith("Error:")
+
+
 def agent_loop(
     messages: list[dict[str, Any]],
     max_turns: int = 8,
@@ -61,7 +66,7 @@ def agent_loop(
             messages.append(
                 {
                     "role": "user",
-                    "content": "<reminder>Update your todos.</reminder>",
+                    "content": "<reminder>use todo_write tool.</reminder>",
                 }
             )
 
@@ -83,6 +88,7 @@ def agent_loop(
                 continue
             return messages
 
+        todo_write_succeeded = False
         for tool_call in message.tool_calls:
             tool_name = tool_call.function.name
             tool_args, parse_error = _parse_tool_args(tool_call.function.arguments)
@@ -103,17 +109,20 @@ def agent_loop(
 
             try:
                 result = handler(**tool_args)
+                print(f"\033[90m {tool_name}: {str(result)[:100]}\033[0m")
             except Exception as exc:
                 result = f"Error: {exc}"
 
             trigger_hooks("PostToolUse", tool_name, result)
 
-            if tool_name == "todo_write":
-                ROUNDS_SINCE_TODO = 0
+            if tool_name == "todo_write" and not _tool_result_failed(result):
+                todo_write_succeeded = True
 
             _append_tool_result(messages, tool_call.id, result)
 
-        if not any(tc.function.name == "todo_write" for tc in message.tool_calls):
+        if todo_write_succeeded:
+            ROUNDS_SINCE_TODO = 0
+        else:
             ROUNDS_SINCE_TODO += 1
 
     return messages
