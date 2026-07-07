@@ -1,7 +1,7 @@
-from utill import WORKDIR
+from util import WORKDIR
 
-from utill.client import create_client, end_client
-from utill.config import load_config
+from util.client import create_client, end_client
+from util.config import load_config
 
 from hook import register_hook, trigger_hooks
 from hook import (

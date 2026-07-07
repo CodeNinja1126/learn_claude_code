@@ -1,4 +1,4 @@
-from utill import WORKDIR
+from util import WORKDIR
 
 HOOKS = {
     "UserPromptSubmit": [],

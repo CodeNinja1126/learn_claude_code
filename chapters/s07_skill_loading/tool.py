@@ -1,41 +1,11 @@
-from util.client import create_client, end_client
-from util.config import load_config
+from util import WORKDIR
+from skill import SKILL_REGISTRY
 
+import ast
 import os
 import subprocess
-import json
 from pathlib import Path
-
-WORKDIR = os.getcwd()
-
-SYSTEM = f"너는 디렉토리 {WORKDIR}의 코딩 에이전트야. 도구를 활용해 문제를 해결해."
-
-DENY_LIST = [
-    "rm -rf /",
-    "sudo",
-    "shutdown",
-    "reboot",
-    "mkfs",
-    "dd if=",
-    "> /dev/sda",
-]
-
-PERMISSION_RULES = [
-    {
-        "tools": ["write_files", "edit_files"],
-        "check": lambda args: not (WORKDIR / args.get("path", ""))
-        .resolve()
-        .is_relative_to(WORKDIR),
-        "message": "Writing outside workspace",
-    },
-    {
-        "tools": ["bash"],
-        "check": lambda args: any(
-            kw in args.get("command", "") for kw in ["rm ", "> /etc/", "chmod 777"]
-        ),
-        "message": "Potentially destructive command",
-    },
-]
+import json
 
 TOOLS = [
     {
@@ -43,7 +13,7 @@ TOOLS = [
         "function": {
             "name": "bash",
             "description": "Run a shell command.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {"command": {"type": "string"}},
                 "required": ["command"],
@@ -55,7 +25,7 @@ TOOLS = [
         "function": {
             "name": "read_file",
             "description": "Read file contents.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
@@ -70,7 +40,7 @@ TOOLS = [
         "function": {
             "name": "write_file",
             "description": "Write content to a file.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
@@ -85,7 +55,7 @@ TOOLS = [
         "function": {
             "name": "edit_file",
             "description": "Replace exact text in a file once.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
@@ -101,51 +71,57 @@ TOOLS = [
         "function": {
             "name": "glob",
             "description": "Find files matching a glob pattern.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {"pattern": {"type": "string"}},
                 "required": ["pattern"],
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_write",
+            "description": (
+                "Plan and track multi-step coding work. Use this before starting any task "
+                "that requires multiple steps, file changes, investigation, or a subtask; "
+                "keep exactly one item in_progress and update statuses as work progresses."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"],
+                                },
+                            },
+                            "required": ["content", "status"],
+                        },
+                    },
+                },
+                "required": ["todos"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_skill",
+            "description": "Load the full content of a skill by name.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        },
+    },
 ]
-
-
-def check_deny_list(command: str) -> str | None:
-    for pattern in DENY_LIST:
-        if pattern in command:
-            return f"Blocked: '{pattern}' is on the deny list"
-    return None
-
-
-def check_rules(tool_name: str, args: dict) -> str | None:
-    for rule in PERMISSION_RULES:
-        if tool_name in rule["tools"] and rule["check"](args):
-            return rule["message"]
-    return None
-
-
-def ask_user(tool_name: str, args: dict, reason: str) -> str:
-    print(f"\n⚠  {reason}")
-    print(f"    Tool: {tool_name}({args})")
-    choice = input("   Allow? [Y/N] ").strip().lower()
-    return "allow" if choice in ("y", "yes") else "deny"
-
-
-def check_permission(name: str, args: dict | None = None) -> bool:
-    if name == "bash":
-        reason = check_deny_list(args["command"])
-        if reason:
-            print(f"\n⛔ {reason}")
-            return False
-
-    reason = check_rules(name, args)
-    if reason:
-        decision = ask_user(name, args, reason)
-        if decision == "deny":
-            return False
-
-    return True
 
 
 def run_bash(command: str) -> str:
@@ -170,8 +146,7 @@ def run_bash(command: str) -> str:
 
 
 def safe_path(p: str) -> Path:
-    base_dir = Path(WORKDIR).resolve()
-    path = (base_dir / p).resolve()
+    path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
         raise ValueError(f"Path escapes workspace: {p}")
     return path
@@ -215,11 +190,62 @@ def run_glob(pattern: str) -> str:
     try:
         results = []
         for match in g.glob(pattern, root_dir=WORKDIR):
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR):
+            path = (WORKDIR / match).resolve()
+            if path.is_relative_to(WORKDIR):
                 results.append(match)
         return "\n".join(results) if results else "(no matches)"
     except Exception as e:
         return f"Error: {e}"
+
+
+def load_skill(name: str) -> str:
+    """Load full skill content. Lookup via registry — no path traversal."""
+    skill = SKILL_REGISTRY.get(name)
+    if not skill:
+        return f"Skill not found: {name}"
+    return skill["content"]
+
+
+CURRENT_TODOS: list[dict] = []
+
+
+def _normalize_todos(todos):
+    if isinstance(todos, str):
+        try:
+            todos = json.loads(todos)
+        except json.JSONDecodeError:
+            try:
+                todos = ast.literal_eval(todos)
+            except (SyntaxError, ValueError):
+                return None, "Error: todos must be a list or JSON array string"
+    if not isinstance(todos, list):
+        return None, "Error: todos must be a list"
+    for i, t in enumerate(todos):
+        if not isinstance(t, dict):
+            return None, f"Error: todos[{i}] must be an object"
+        if "content" not in t or "status" not in t:
+            return None, f"Error: todos[{i}] missing 'content' or 'status'"
+        if t["status"] not in ("pending", "in_progress", "completed"):
+            return None, f"Error: todos[{i}] has invalid status '{t['status']}'"
+    return todos, None
+
+
+def run_todo_write(todos: list) -> str:
+    global CURRENT_TODOS
+    todos, error = _normalize_todos(todos)
+    if error:
+        return error
+    CURRENT_TODOS = todos
+    lines = ["\n\033[33m## Current Tasks\033[0m"]
+    for t in CURRENT_TODOS:
+        icon = {
+            "pending": " ",
+            "in_progress": "\033[36m▸\033[0m",
+            "completed": "\033[32m✓\033[0m",
+        }[t["status"]]
+        lines.append(f"  [{icon}] {t['content']}")
+    print("\n".join(lines))
+    return f"Updated {len(CURRENT_TODOS)} tasks"
 
 
 TOOL_HANDLERS = {
@@ -228,69 +254,6 @@ TOOL_HANDLERS = {
     "write_file": run_write,
     "edit_file": run_edit,
     "glob": run_glob,
+    "todo_write": run_todo_write,
+    "load_skill": load_skill,
 }
-
-
-def agent_loop(
-    messages: list[dict[str, any]],
-    max_turns: int = 8,
-):
-
-    config = load_config()
-    client = create_client(config)
-
-    messages = [{"role": "system", "content": SYSTEM}] + messages
-
-    for _ in range(max_turns):
-
-        response = client.chat.completions.create(
-            model=config.model,
-            messages=messages,
-            tools=TOOLS,
-        )
-
-        message = response.choices[0].message
-        messages.append(message)
-        print(message.content)
-        if not message.tool_calls:
-            return None
-
-        for tool_call in message.tool_calls:
-            tool_name = tool_call.function.name
-            tool_args = json.loads(tool_call.function.arguments)
-            print(f"\033[33m{tool_name}이 사용되었습니다. \033[0m")
-            if not check_permission(tool_name, tool_args):
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": "Permission denied.",
-                    }
-                )
-                print("permission_denied")
-                continue
-            result = TOOL_HANDLERS[tool_name](**tool_args)
-            print(result)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": result,
-                }
-            )
-
-
-def main() -> None:
-
-    messages = [
-        {
-            "role": "user",
-            "content": "'test' 파일 삭제해줘.",
-        }
-    ]
-    agent_loop(messages)
-    end_client()
-
-
-if __name__ == "__main__":
-    main()

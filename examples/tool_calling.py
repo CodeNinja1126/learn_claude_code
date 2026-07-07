@@ -1,7 +1,7 @@
-from utill.client import create_client
-from utill.config import load_config
-from utill.loop import AgentLoop
-from utill.tools import TOOL_HANDLERS, TOOLS
+from util.client import create_client
+from util.config import load_config
+from util.loop import AgentLoop
+from util.tools import TOOL_HANDLERS, TOOLS
 
 
 def main() -> None:

@@ -1,5 +1,5 @@
-from utill.client import create_client
-from utill.config import load_config
+from util.client import create_client
+from util.config import load_config
 
 
 def main() -> None:

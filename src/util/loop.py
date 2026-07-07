@@ -4,7 +4,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from utill.config import ModelConfig, load_config
+from util.config import ModelConfig, load_config
 
 
 ToolHandler = Callable[..., str]

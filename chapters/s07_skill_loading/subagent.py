@@ -19,12 +19,13 @@ SUB_TOOLS = [
     tool
     for tool in TOOLS
     if tool.get("function", {}).get("name") != "task" and \
-        tool.get("function", {}).get("name") != "todo_write"
+        tool.get("function", {}).get("name") != "todo_write" and \
+        tool.get("function", {}).get("name") != "load_skill"
 ]
 SUB_HANDLERS = {
     name: handler
     for name, handler in TOOL_HANDLERS.items()
-    if name != "task" and name != 'todo_write' 
+    if name != "task" and name != "todo_write" and name != "load_skill"
 }
 
 _SUB_CONFIG: Any | None = None

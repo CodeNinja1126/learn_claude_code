@@ -15,12 +15,20 @@ from hook import (
 )
 from tool import TOOLS, TOOL_HANDLERS
 import subagent  # Registers the parent-only task tool.
-
-
-SYSTEM = f"너는 디렉토리 {WORKDIR}의 코딩 에이전트야. 도구를 활용해 문제를 해결해, 문제를 해결할 때까지 작업을 멈추지 말고 계속해."
+from skill import list_skills
 
 ROUNDS_SINCE_TODO = 0
 
+
+def build_system() -> str:
+    catalog = list_skills()
+    return (
+        f"You are a coding agent at {WORKDIR}. "
+        f"Skills available:\n{catalog}\n"
+        "Use load_skill to get full details when needed."
+    )
+
+SYSTEM = build_system()
 
 def _message_to_dict(message: Any) -> dict[str, Any]:
     if hasattr(message, "model_dump"):

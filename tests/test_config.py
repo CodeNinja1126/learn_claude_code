@@ -1,4 +1,4 @@
-from utill.config import load_config
+from util.config import load_config
 
 
 def test_load_config_defaults() -> None:

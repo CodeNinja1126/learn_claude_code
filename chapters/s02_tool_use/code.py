@@ -1,5 +1,5 @@
-from utill.client import create_client, end_client
-from utill.config import load_config
+from util.client import create_client, end_client
+from util.config import load_config
 
 import os
 import subprocess
