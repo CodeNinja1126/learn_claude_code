@@ -1,1 +1,5 @@
-{}
+{
+  "scripts": {
+    "openai-oauth": "NODE_OPTIONS=--experimental-global-webcrypto npx -y openai-oauth@latest --host ${OPENAI_OAUTH_HOST:-127.0.0.1} --port ${OPENAI_OAUTH_PORT:-10531}"
+  }
+}
