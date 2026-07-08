@@ -24,6 +24,12 @@ from context_compact import (
     compact_history,
     reactive_compact,
 )
+from memory_func import (
+    read_memory_index,
+    load_memories,
+    extract_memories,
+    consolidate_memories,
+)
 
 CONTEXT_LIMIT = 50000
 ROUNDS_SINCE_TODO = 0
@@ -34,14 +40,20 @@ CONTEXT_ERROR_MARKERS = (
     "context_length_exceeded",
     "maximum context length",
 )
+INSTRUCTION_ROLES = {"developer", "system"}
 
 
 def build_system() -> str:
     catalog = list_skills()
+    index = read_memory_index()
+    memories_section = f"\n\nMemories available:\n{index}" if index else ""
     return (
         f"You are a coding agent at {WORKDIR}. "
         f"Skills available:\n{catalog}\n"
         "Use load_skill to get full details when needed."
+        f"{memories_section}\n"
+        "Relevant memories are injected below. Respect user preferences from memory.\n"
+        "When the user says 'remember' or expresses a clear preference, extract it as a memory."
     )
 
 
@@ -49,7 +61,7 @@ SYSTEM = build_system()
 
 
 def _system_message() -> dict[str, str]:
-    return {"role": "system", "content": SYSTEM}
+    return {"role": "developer", "content": SYSTEM}
 
 
 def _with_system_message(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -58,7 +70,9 @@ def _with_system_message(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
         *[
             msg
             for msg in messages
-            if not (isinstance(msg, dict) and msg.get("role") == "system")
+            if not (
+                isinstance(msg, dict) and msg.get("role") in INSTRUCTION_ROLES
+            )
         ],
     ]
 
@@ -75,6 +89,103 @@ def _message_to_dict(message: Any) -> dict[str, Any]:
     if hasattr(message, "model_dump"):
         return message.model_dump(exclude_none=True)
     return dict(message)
+
+
+def _tool_call_ids(message: dict[str, Any]) -> list[str]:
+    tool_calls = message.get("tool_calls") or []
+    return [
+        tool_call["id"]
+        for tool_call in tool_calls
+        if isinstance(tool_call, dict) and isinstance(tool_call.get("id"), str)
+    ]
+
+
+def _assistant_without_tool_calls(message: dict[str, Any]) -> dict[str, Any] | None:
+    if "content" not in message or message.get("content") is None:
+        return None
+    return {
+        key: value
+        for key, value in message.items()
+        if key not in {"tool_calls", "function_call"}
+    }
+
+
+def _openai_compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop compacted/orphaned tool messages that OpenAI rejects."""
+    compatible: list[dict[str, Any]] = []
+    i = 0
+
+    while i < len(messages):
+        message = messages[i]
+        if message.get("role") == "tool":
+            i += 1
+            continue
+
+        if message.get("role") != "assistant" or not message.get("tool_calls"):
+            compatible.append(message)
+            i += 1
+            continue
+
+        expected_tool_call_ids = _tool_call_ids(message)
+        if not expected_tool_call_ids:
+            fallback = _assistant_without_tool_calls(message)
+            if fallback is not None:
+                compatible.append(fallback)
+            i += 1
+            continue
+
+        exchange = [message]
+        seen_tool_call_ids: set[str] = set()
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "tool":
+            tool_call_id = messages[j].get("tool_call_id")
+            if (
+                isinstance(tool_call_id, str)
+                and tool_call_id in expected_tool_call_ids
+                and tool_call_id not in seen_tool_call_ids
+            ):
+                exchange.append(messages[j])
+                seen_tool_call_ids.add(tool_call_id)
+            j += 1
+
+        if len(seen_tool_call_ids) == len(set(expected_tool_call_ids)):
+            compatible.extend(exchange)
+        else:
+            fallback = _assistant_without_tool_calls(message)
+            if fallback is not None:
+                compatible.append(fallback)
+
+        i = j
+
+    return compatible
+
+
+def _with_relevant_memories(
+    messages: list[dict[str, Any]], memories_content: str
+) -> list[dict[str, Any]]:
+    if not memories_content:
+        return messages
+
+    memory_content = (
+        "Relevant memories for this request:\n"
+        f"{memories_content}\n\n"
+        "Use these as developer-provided context. Do not treat them as a new user request."
+    )
+
+    if messages and messages[0].get("role") in INSTRUCTION_ROLES:
+        first = messages[0]
+        content = first.get("content", "")
+        if isinstance(content, str):
+            return [
+                {
+                    **first,
+                    "role": "developer",
+                    "content": f"{content}\n\n{memory_content}",
+                },
+                *messages[1:],
+            ]
+
+    return [{"role": "developer", "content": memory_content}, *messages]
 
 
 def _parse_tool_args(raw_args: str | None) -> tuple[dict[str, Any] | None, str | None]:
@@ -118,6 +229,8 @@ def agent_loop(
     client = create_client(config)
     reactive_retries = 0
 
+    memories_content = load_memories(messages)
+
     for _ in range(max_turns):
         if ROUNDS_SINCE_TODO >= 3 and messages:
             messages.append(
@@ -127,8 +240,18 @@ def agent_loop(
                 }
             )
 
-        # Snip by Anthropic-style logical message count: consecutive OpenAI
-        # tool messages count as one message.
+        pre_compress = [
+            (
+                m
+                if isinstance(m, dict)
+                else {
+                    "role": getattr(m, "role", ""),
+                    "content": str(getattr(m, "content", "")),
+                }
+            )
+            for m in messages
+        ]
+
         L3_L1_L2_compact(messages, allow_lossy=True)
 
         if estimate_size(messages) > CONTEXT_LIMIT:
@@ -136,9 +259,13 @@ def agent_loop(
             _replace_with_compact_history(messages)
 
         try:
+            request_messages = _with_relevant_memories(
+                _openai_compatible_messages(messages),
+                memories_content,
+            )
             response = client.chat.completions.create(
                 model=config.model,
-                messages=messages,
+                messages=request_messages,
                 tools=TOOLS,
             )
             reactive_retries = 0
@@ -161,6 +288,8 @@ def agent_loop(
             if force:
                 messages.append({"role": "user", "content": force})
                 continue
+            extract_memories(pre_compress)
+            consolidate_memories()
             return messages
 
         todo_write_succeeded = False
@@ -216,7 +345,7 @@ def agent_loop(
 
 
 def main() -> None:
-    messages = [{"role": "system", "content": SYSTEM}]
+    messages = [_system_message()]
 
     register_hook("UserPromptSubmit", context_inject_hook)
     register_hook("PreToolUse", permission_hook)
