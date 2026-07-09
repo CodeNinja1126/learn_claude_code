@@ -15,7 +15,7 @@ def L3_L1_L2_compact(messages, allow_lossy=False):
     messages[:] = tool_result_budget(messages)
     messages[:] = micro_compact(messages)
     if allow_lossy:
-        messages[:] = snip_compact(messages)
+        messages[:] = snip_compact(messages, 100)
     return messages
 
 # L1
@@ -118,8 +118,8 @@ def collect_tool_results(messages):
     return blocks
 
 
-KEEP_RECENT_TOOL_RESULTS = 8
-MICRO_COMPACT_THRESHOLD = 2_000
+KEEP_RECENT_TOOL_RESULTS = 20
+MICRO_COMPACT_THRESHOLD = 640_000
 
 
 def micro_compact(messages):
@@ -137,7 +137,7 @@ def micro_compact(messages):
 
 # L3
 TOOL_RESULTS_DIR = WORKDIR / ".task_outputs" / "tool-results"
-PERSIST_THRESHOLD = 30000
+PERSIST_THRESHOLD = 640_000
 
 
 def persist_large_output(tool_call_id, output):

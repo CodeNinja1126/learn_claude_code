@@ -4,7 +4,7 @@ import json
 from memory_store import read_memory_index
 from messages import INSTRUCTION_ROLES
 from skill import list_skills
-from tool import TOOL_HANDLERS
+from tool import TOOLS
 from util import WORKDIR
 
 
@@ -74,7 +74,7 @@ def update_context(
     messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
-        "enabled_tools": list(TOOL_HANDLERS.keys()),
+        "enabled_tools": [tool["function"]["name"] for tool in TOOLS],
         "workspace": str(WORKDIR),
         "skills": list_skills(),
         "memories": read_memory_index(),

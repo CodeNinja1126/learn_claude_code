@@ -6,6 +6,12 @@ from context_compact import (
     estimate_size,
     reactive_compact,
 )
+from error_recovery import (
+    RecoveryState,
+    call_with_retries,
+    completion_hit_token_limit,
+    is_context_limit_error,
+)
 from hook import trigger_hooks
 from memory import consolidate_memories, extract_memories, load_memories
 from messages import (
@@ -22,21 +28,9 @@ from util.client import create_client
 from util.config import load_config
 
 
-CONTEXT_LIMIT = 50000
-MAX_REACTIVE_RETRIES = 1
-CONTEXT_ERROR_MARKERS = (
-    "prompt_too_long",
-    "too many tokens",
-    "context_length_exceeded",
-    "maximum context length",
-)
+CONTEXT_LIMIT = 640000
 
 rounds_since_todo = 0
-
-
-def _is_context_limit_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return any(marker in message for marker in CONTEXT_ERROR_MARKERS)
 
 
 def _serializable_messages(
@@ -116,7 +110,7 @@ def agent_loop(
 
     config = load_config()
     client = create_client(config)
-    reactive_retries = 0
+    recovery = RecoveryState(config.model)
     context = update_context({}, messages)
 
     for _ in range(max_turns):
@@ -130,6 +124,7 @@ def agent_loop(
             print("[auto compact]")
             messages[:] = with_system_message(compact_history(messages))
 
+        needs_continuation = False
         try:
             context = update_context(context, messages)
             messages[:] = with_system_message(messages, context)
@@ -137,19 +132,51 @@ def agent_loop(
                 openai_compatible_messages(messages),
                 memories_content,
             )
-            response = client.chat.completions.create(
-                model=config.model,
-                messages=request_messages,
-                tools=TOOLS,
-            )
-            reactive_retries = 0
+
+            def request(model: str, max_tokens: int) -> Any:
+                return client.chat.completions.create(
+                    model=model,
+                    messages=request_messages,
+                    tools=TOOLS,
+                    max_tokens=max_tokens,
+                )
+
+            response = call_with_retries(request, recovery)
+            while completion_hit_token_limit(response):
+                message = response.choices[0].message
+                escalation = recovery.escalate_tokens_once()
+                if escalation is not None:
+                    previous, current = escalation
+                    print(f"[max_tokens] escalating {previous} -> {current}")
+                    response = call_with_retries(request, recovery)
+                    continue
+
+                messages.append(message_to_dict(message))
+                continuation = recovery.next_continuation()
+                if continuation is None:
+                    print("[max_tokens] recovery limit reached")
+                    return messages
+                prompt, count, limit = continuation
+                messages.append({"role": "user", "content": prompt})
+                print(f"[max_tokens] continuation {count}/{limit}")
+                needs_continuation = True
+                break
         except Exception as exc:
-            if _is_context_limit_error(exc) and reactive_retries < MAX_REACTIVE_RETRIES:
+            if is_context_limit_error(exc) and not recovery.has_reactive_compacted:
                 print("[reactive compact]")
                 messages[:] = with_system_message(reactive_compact(messages))
-                reactive_retries += 1
+                recovery.mark_reactive_compacted()
                 continue
-            raise
+
+            name = type(exc).__name__
+            print(f"[unrecoverable] {name}: {str(exc)[:100]}")
+            messages.append(
+                {"role": "assistant", "content": f"[Error] {name}: {str(exc)[:200]}"}
+            )
+            return messages
+
+        if needs_continuation:
+            continue
 
         message = response.choices[0].message
         messages.append(message_to_dict(message))
