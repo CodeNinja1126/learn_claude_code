@@ -13,6 +13,6 @@ def create_client(config: ModelConfig | None = None) -> OpenAI:
 def end_client(config: ModelConfig | None = None):
     config = config or load_config()
     requests.post(
-        "http://localhost:11434/api/chat",
+        config.base_url[:-2] + "api/chat",
         json={"model": config.model, "keep_alive": 0}
     )

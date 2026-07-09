@@ -13,3 +13,4 @@ wheels/
 .vscode
 tests/
 .transcripts/
+.memory/
